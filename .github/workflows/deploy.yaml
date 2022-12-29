@@ -1,0 +1,69 @@
+name: Deploy MultiK8s
+on:
+  push:
+    branches:
+      - master
+ 
+env:
+  SHA: $(git rev-parse HEAD)
+ 
+jobs:
+  build:
+    runs-on: ubuntu-latest
+ 
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+ 
+    steps:
+      - uses: actions/checkout@v3
+ 
+      - name: Test
+        run: |-
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker build -t shoaibakhtar1010/react-test -f ./client/Dockerfile.dev ./client
+          docker run -e CI=true shoaibakhtar1010/react-test npm test
+ 
+      - name: Set Identity Provider
+        uses: 'google-github-actions/auth@v0'
+        with:
+          workload_identity_provider: 'projects/24506645623/locations/global/workloadIdentityPools/my-pool/providers/my-provider'
+          service_account: 'actions-deployer@lively-pursuit-373015.iam.gserviceaccount.com'
+ 
+      - name: Set Project
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          project_id: lively-pursuit-373015
+ 
+      - name: Auth
+        run: |-
+          gcloud --quiet auth configure-docker
+ 
+      - name: Get Credentials
+        uses: google-github-actions/get-gke-credentials@v0
+        with:
+          cluster_name: k8s-multi-cluster
+          location: us-central1-a
+ 
+      - name: Build
+        run: |-
+          docker build -t shoaibakhtar1010/multi-client-k8s-gh:latest -t shoaibakhtar1010/multi-client-k8s-gh:${{ env.SHA }} -f ./client/Dockerfile ./client
+          docker build -t shoaibakhtar1010/multi-server-k8s-pgfix-gh:latest -t shoaibakhtar1010/multi-server-k8s-pgfix-gh:${{ env.SHA }} -f ./server/Dockerfile ./server
+          docker build -t shoaibakhtar1010/multi-worker-k8s-gh:latest -t shoaibakhtar1010/multi-worker-k8s-gh:${{ env.SHA }} -f ./worker/Dockerfile ./worker
+ 
+      - name: Push
+        run: |-
+          docker push shoaibakhtar1010/multi-client-k8s-gh:latest
+          docker push shoaibakhtar1010/multi-server-k8s-pgfix-gh:latest
+          docker push shoaibakhtar1010/multi-worker-k8s-gh:latest
+ 
+          docker push shoaibakhtar1010/multi-client-k8s-gh:${{ env.SHA }}
+          docker push shoaibakhtar1010/multi-server-k8s-pgfix-gh:${{ env.SHA }}
+          docker push shoaibakhtar1010/multi-worker-k8s-gh:${{ env.SHA }}
+ 
+      - name: Apply
+        run: |-
+          kubectl apply -f k8s
+          kubectl set image deployments/server-deployment server=shoaibakhtar1010/multi-server-k8s-pgfix-gh:${{ env.SHA }}
+          kubectl set image deployments/client-deployment client=shoaibakhtar1010/multi-client-k8s-gh:${{ env.SHA }}
+          kubectl set image deployments/worker-deployment worker=shoaibakhtar1010/multi-worker-k8s-gh:${{ env.SHA }}
